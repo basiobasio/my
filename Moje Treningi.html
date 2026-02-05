@@ -48,12 +48,11 @@
 
             useEffect(() => {
                 const saved = localStorage.getItem('workouts');
-                const isInit = localStorage.getItem('workoutsInitialized');
                 
                 if (saved) {
                     setWorkouts(JSON.parse(saved));
-                } else if (!isInit) {
-                    // Initialize with Feb 3rd Pull workout
+                } else {
+                    // Only initialize if no saved data exists at all
                     const initialWorkout = {
                         id: Date.now(),
                         date: '2026-02-03',
@@ -61,7 +60,6 @@
                         timestamp: new Date('2026-02-03').toISOString()
                     };
                     setWorkouts([initialWorkout]);
-                    localStorage.setItem('workoutsInitialized', 'true');
                 }
                 setInitialized(true);
             }, []);
