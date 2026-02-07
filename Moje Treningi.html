@@ -41,6 +41,9 @@
             const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
             const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
             const [initialized, setInitialized] = useState(false);
+            const [selectedDay, setSelectedDay] = useState(null);
+            const [showMenu, setShowMenu] = useState(false);
+            const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
 
             const monthNames = ['Styczeń', 'Luty', 'Marzec', 'Kwiecień', 'Maj', 'Czerwiec', 
                                'Lipiec', 'Sierpień', 'Wrzesień', 'Październik', 'Listopad', 'Grudzień'];
@@ -52,7 +55,6 @@
                 if (saved) {
                     setWorkouts(JSON.parse(saved));
                 } else {
-                    // Only initialize if no saved data exists at all
                     const initialWorkout = {
                         id: Date.now(),
                         date: '2026-02-03',
@@ -67,6 +69,19 @@
             useEffect(() => {
                 localStorage.setItem('workouts', JSON.stringify(workouts));
             }, [workouts]);
+
+            // Close menu when clicking outside
+            useEffect(() => {
+                const handleClickOutside = () => {
+                    if (showMenu) {
+                        setShowMenu(false);
+                        setSelectedDay(null);
+                    }
+                };
+                
+                document.addEventListener('click', handleClickOutside);
+                return () => document.removeEventListener('click', handleClickOutside);
+            }, [showMenu]);
 
             const getDateString = (date) => {
                 return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -99,15 +114,46 @@
                 return workouts.find(w => w.date === dateStr);
             };
 
-            const getSuggestedType = () => {
-                const sortedWorkouts = [...workouts].sort((a, b) => 
-                    new Date(b.date).getTime() - new Date(a.date).getTime()
-                );
+            const handleDayClick = (day, event) => {
+                event.stopPropagation();
+                const date = new Date(currentYear, currentMonth, day);
+                setSelectedDay(date);
                 
-                if (sortedWorkouts.length === 0) return 'Push';
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenuPosition({
+                    x: rect.left + rect.width / 2,
+                    y: rect.top - 10
+                });
                 
-                const lastWorkout = sortedWorkouts[0];
-                return lastWorkout.type === 'Push' ? 'Pull' : 'Push';
+                setShowMenu(true);
+            };
+
+            const handleWorkoutSelect = (type, event) => {
+                event.stopPropagation();
+                if (selectedDay) {
+                    addWorkout(selectedDay, type);
+                }
+                setShowMenu(false);
+                setSelectedDay(null);
+            };
+
+            const handleDeleteWorkout = (event) => {
+                event.stopPropagation();
+                if (selectedDay) {
+                    const dateStr = getDateString(selectedDay);
+                    removeWorkout(dateStr);
+                }
+                setShowMenu(false);
+                setSelectedDay(null);
+            };
+
+            // Calculate yearly workout count
+            const getYearlyWorkoutCount = () => {
+                return workouts.filter(w => {
+                    const workoutDate = new Date(w.date);
+                    return workoutDate.getFullYear() === currentYear && 
+                           (w.type === 'Push' || w.type === 'Pull');
+                }).length;
             };
 
             const getPlannedWorkout = (date) => {
@@ -117,17 +163,14 @@
                 const checkDate = new Date(date);
                 checkDate.setHours(0, 0, 0, 0);
                 
-                // Don't show planned for past dates
                 if (checkDate < today) {
                     return null;
                 }
                 
-                // If there's an actual workout, don't show planned
                 if (getWorkoutForDate(date)) {
                     return null;
                 }
                 
-                // Find the last actual workout before or on this date
                 const sortedWorkouts = [...workouts]
                     .filter(w => new Date(w.date) <= checkDate)
                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -139,60 +182,15 @@
                 
                 const daysSince = Math.floor((checkDate.getTime() - lastWorkout.getTime()) / (1000 * 60 * 60 * 24));
                 
-                // Show REST on day 1 after workout
                 if (daysSince === 1) {
                     return 'REST';
                 }
                 
-                // Show next workout on day 2
                 if (daysSince === 2) {
                     return sortedWorkouts[0].type === 'Push' ? 'Pull' : 'Push';
                 }
                 
                 return null;
-            };
-
-            const getDaysInMonth = (month, year) => {
-                return new Date(year, month + 1, 0).getDate();
-            };
-
-            const getFirstDayOfMonth = (month, year) => {
-                const day = new Date(year, month, 1).getDay();
-                return day === 0 ? 6 : day - 1; // Convert to Monday = 0
-            };
-
-            const getCalendarDays = () => {
-                const daysInMonth = getDaysInMonth(currentMonth, currentYear);
-                const firstDay = getFirstDayOfMonth(currentMonth, currentYear);
-                const days = [];
-
-                // Empty cells before first day
-                for (let i = 0; i < firstDay; i++) {
-                    days.push(null);
-                }
-
-                // Days of month
-                for (let day = 1; day <= daysInMonth; day++) {
-                    days.push(day);
-                }
-
-                return days;
-            };
-
-            const changeMonth = (delta) => {
-                let newMonth = currentMonth + delta;
-                let newYear = currentYear;
-
-                if (newMonth > 11) {
-                    newMonth = 0;
-                    newYear++;
-                } else if (newMonth < 0) {
-                    newMonth = 11;
-                    newYear--;
-                }
-
-                setCurrentMonth(newMonth);
-                setCurrentYear(newYear);
             };
 
             const getMonthStats = () => {
@@ -203,74 +201,92 @@
 
                 const pushCount = monthWorkouts.filter(w => w.type === 'Push').length;
                 const pullCount = monthWorkouts.filter(w => w.type === 'Pull').length;
+                const restCount = monthWorkouts.filter(w => w.type === 'REST').length;
+                const totalWorkouts = pushCount + pullCount;
 
-                return {
-                    total: monthWorkouts.length,
-                    push: pushCount,
-                    pull: pullCount
-                };
+                return { pushCount, pullCount, restCount, totalWorkouts };
             };
 
             const getCurrentStreak = () => {
-                if (workouts.length === 0) return 0;
-                
-                const sortedWorkouts = [...workouts]
-                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-                
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 
+                const sortedWorkouts = [...workouts]
+                    .filter(w => w.type !== 'REST')
+                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                if (sortedWorkouts.length === 0) return 0;
+
                 let streak = 0;
-                let expectedDate = new Date(today);
+                let currentDate = new Date(today);
                 
-                // Check if there's a workout today or yesterday (to account for flexibility)
-                const lastWorkoutDate = new Date(sortedWorkouts[0].date);
-                lastWorkoutDate.setHours(0, 0, 0, 0);
-                
-                const daysSinceLastWorkout = Math.floor((today.getTime() - lastWorkoutDate.getTime()) / (1000 * 60 * 60 * 24));
-                
-                // If last workout was more than 2 days ago, streak is broken
-                if (daysSinceLastWorkout > 2) return 0;
-                
-                // Start checking from the most recent workout
-                for (let i = 0; i < sortedWorkouts.length - 1; i++) {
-                    const currentDate = new Date(sortedWorkouts[i].date);
-                    const nextDate = new Date(sortedWorkouts[i + 1].date);
+                for (let workout of sortedWorkouts) {
+                    const workoutDate = new Date(workout.date);
+                    workoutDate.setHours(0, 0, 0, 0);
                     
-                    currentDate.setHours(0, 0, 0, 0);
-                    nextDate.setHours(0, 0, 0, 0);
+                    const expectedDate = new Date(currentDate);
+                    expectedDate.setDate(expectedDate.getDate() - (streak * 2 + (streak > 0 ? 1 : 0)));
+                    expectedDate.setHours(0, 0, 0, 0);
                     
-                    const daysDiff = Math.floor((currentDate.getTime() - nextDate.getTime()) / (1000 * 60 * 60 * 24));
-                    
-                    // Check if the gap is 2 days (perfect) or 3 days (one day rest + training day)
-                    if (daysDiff >= 2 && daysDiff <= 3) {
-                        streak++;
+                    if (streak === 0) {
+                        const diff = Math.floor((currentDate.getTime() - workoutDate.getTime()) / (1000 * 60 * 60 * 24));
+                        if (diff <= 2) {
+                            streak = 1;
+                            currentDate = new Date(workoutDate);
+                        } else {
+                            break;
+                        }
                     } else {
-                        // Streak is broken
-                        break;
+                        const diff = Math.floor((currentDate.getTime() - workoutDate.getTime()) / (1000 * 60 * 60 * 24));
+                        if (diff >= 1 && diff <= 2) {
+                            streak++;
+                            currentDate = new Date(workoutDate);
+                        } else {
+                            break;
+                        }
                     }
                 }
                 
-                // Add 1 to include the most recent workout
-                return streak + 1;
+                return streak;
             };
 
-            const getAverageWorkoutsPerWeek = () => {
-                if (workouts.length === 0) return 0;
+            const getDaysInMonth = (month, year) => {
+                return new Date(year, month + 1, 0).getDate();
+            };
+
+            const getFirstDayOfMonth = (month, year) => {
+                const day = new Date(year, month, 1).getDay();
+                return day === 0 ? 6 : day - 1;
+            };
+
+            const getCalendarDays = () => {
+                const daysInMonth = getDaysInMonth(currentMonth, currentYear);
+                const firstDay = getFirstDayOfMonth(currentMonth, currentYear);
                 
-                const sortedWorkouts = [...workouts].sort((a, b) => 
-                    new Date(a.date).getTime() - new Date(b.date).getTime()
-                );
+                const days = [];
+                for (let i = 0; i < firstDay; i++) {
+                    days.push(null);
+                }
+                for (let i = 1; i <= daysInMonth; i++) {
+                    days.push(i);
+                }
+                return days;
+            };
+
+            const changeMonth = (delta) => {
+                let newMonth = currentMonth + delta;
+                let newYear = currentYear;
                 
-                const firstWorkout = new Date(sortedWorkouts[0].date);
-                const lastWorkout = new Date(sortedWorkouts[sortedWorkouts.length - 1].date);
+                if (newMonth > 11) {
+                    newMonth = 0;
+                    newYear++;
+                } else if (newMonth < 0) {
+                    newMonth = 11;
+                    newYear--;
+                }
                 
-                const daysDiff = Math.floor((lastWorkout.getTime() - firstWorkout.getTime()) / (1000 * 60 * 60 * 24));
-                const weeks = daysDiff / 7;
-                
-                if (weeks < 1) return workouts.length; // Less than a week
-                
-                return (workouts.length / weeks).toFixed(1);
+                setCurrentMonth(newMonth);
+                setCurrentYear(newYear);
             };
 
             const isToday = (day) => {
@@ -280,237 +296,272 @@
                        currentYear === today.getFullYear();
             };
 
-            const handleDayClick = (day) => {
-                const date = new Date(currentYear, currentMonth, day);
-                const workout = getWorkoutForDate(date);
-                const planned = getPlannedWorkout(date);
-                
-                if (workout) {
-                    // Has actual workout - allow removal
-                    if (window.confirm(`Usunąć trening ${workout.type} z ${day} ${monthNames[currentMonth]}?`)) {
-                        removeWorkout(getDateString(date));
-                    }
-                } else if (planned && planned !== 'REST') {
-                    // Has planned workout (not REST) - quick confirm
-                    if (window.confirm(`Potwierdzić trening ${planned}?`)) {
-                        addWorkout(date, planned);
-                    }
-                } else if (planned === 'REST') {
-                    // REST day - just show message
-                    alert('To dzień odpoczynku! 😴');
-                } else {
-                    // No workout - manual add
-                    const suggested = getSuggestedType();
-                    const type = window.confirm(`Dodać trening ${suggested}?\n\nOK = ${suggested}\nAnuluj = ${suggested === 'Push' ? 'Pull' : 'Push'}`) 
-                        ? suggested 
-                        : (suggested === 'Push' ? 'Pull' : 'Push');
-                    addWorkout(date, type);
-                }
-            };
-
             const stats = getMonthStats();
             const streak = getCurrentStreak();
-            const suggested = getSuggestedType();
-            const avgPerWeek = getAverageWorkoutsPerWeek();
+            const yearlyCount = getYearlyWorkoutCount();
+
+            if (!initialized) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+                        <div className="text-2xl text-slate-600">Ładowanie...</div>
+                    </div>
+                );
+            }
 
             return (
-                <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
-                    <div className="max-w-5xl mx-auto">
-                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-                            <div className="flex items-center justify-between mb-6">
-                                <div className="flex items-center gap-3">
+                <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-100 p-4">
+                    <div className="max-w-6xl mx-auto">
+                        <div className="text-center mb-8 pt-6">
+                            <div className="flex items-center justify-center gap-3 mb-2">
+                                <div className="text-blue-600">
                                     <Dumbbell />
-                                    <h1 className="text-3xl font-bold text-slate-800">Moje Treningi</h1>
                                 </div>
-                                <div className="text-right">
-                                    <p className="text-sm text-slate-500">Następny trening</p>
-                                    <p className="text-2xl font-bold text-blue-600">{suggested}</p>
+                                <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                                    Moje Treningi
+                                </h1>
+                                <div className="text-blue-600">
+                                    <Dumbbell />
+                                </div>
+                            </div>
+                            <p className="text-slate-600 text-lg">Śledź swoje postępy! 💪</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                                <div className="text-emerald-100 text-sm font-semibold mb-1">TRENINGI W ROKU {currentYear}</div>
+                                <div className="text-5xl font-bold">{yearlyCount}</div>
+                                <div className="text-emerald-100 text-sm mt-2">Tak trzymaj! 🎯</div>
+                            </div>
+
+                            <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                                <div className="text-blue-100 text-sm font-semibold mb-1">TRENINGI W MIESIĄCU</div>
+                                <div className="text-5xl font-bold">{stats.totalWorkouts}</div>
+                                <div className="text-blue-100 text-sm mt-2">
+                                    Push: {stats.pushCount} | Pull: {stats.pullCount}
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4">
-                                    <p className="text-xs text-slate-600 mb-1">Treningów w miesiącu</p>
-                                    <p className="text-3xl font-bold text-blue-700">{stats.total}</p>
-                                </div>
-                                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4">
-                                    <p className="text-xs text-slate-600 mb-1">Push</p>
-                                    <p className="text-3xl font-bold text-green-700">{stats.push}</p>
-                                </div>
-                                <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg p-4">
-                                    <p className="text-xs text-slate-600 mb-1">Pull</p>
-                                    <p className="text-3xl font-bold text-yellow-700">{stats.pull}</p>
-                                </div>
-                                <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg p-4">
-                                    <p className="text-xs text-slate-600 mb-1">Seria treningów</p>
-                                    <p className="text-3xl font-bold text-amber-700">{streak > 0 ? `🔥 ${streak}` : '0'}</p>
-                                </div>
-                                <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-lg p-4">
-                                    <p className="text-xs text-slate-600 mb-1">Średnio/tydzień</p>
-                                    <p className="text-3xl font-bold text-indigo-700">{avgPerWeek}</p>
+                            <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-2xl shadow-xl p-6 text-white transform hover:scale-105 transition-transform">
+                                <div className="text-purple-100 text-sm font-semibold mb-1">AKTUALNA SERIA</div>
+                                <div className="text-5xl font-bold">{streak}</div>
+                                <div className="text-purple-100 text-sm mt-2">
+                                    {streak > 0 ? '🔥 Niesamowite!' : 'Czas zacząć!'}
                                 </div>
                             </div>
                         </div>
 
-                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-                            <div className="flex items-center justify-between mb-6">
-                                <button
-                                    onClick={() => changeMonth(-1)}
-                                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg font-semibold transition-colors"
-                                >
-                                    ←
-                                </button>
-                                <h2 className="text-2xl font-bold text-slate-800">
-                                    {monthNames[currentMonth]} {currentYear}
-                                </h2>
-                                <button
-                                    onClick={() => changeMonth(1)}
-                                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg font-semibold transition-colors"
-                                >
-                                    →
-                                </button>
-                            </div>
-
-                            <div className="grid grid-cols-7 gap-2 mb-2">
-                                {dayNames.map(day => (
-                                    <div key={day} className="text-center text-sm font-semibold text-slate-600 p-2">
-                                        {day}
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="grid grid-cols-7 gap-2">
-                                {getCalendarDays().map((day, index) => {
-                                    if (day === null) {
-                                        return <div key={`empty-${index}`} className="aspect-square"></div>;
-                                    }
-
-                                    const date = new Date(currentYear, currentMonth, day);
-                                    const workout = getWorkoutForDate(date);
-                                    const planned = getPlannedWorkout(date);
-                                    const today = isToday(day);
-
-                                    let bgClass = 'bg-slate-100 hover:bg-slate-200 text-slate-700';
-                                    let textClass = '';
-                                    
-                                    if (workout) {
-                                        if (workout.type === 'Push') {
-                                            bgClass = 'bg-gradient-to-br from-green-400 to-green-500 text-white font-bold shadow-lg';
-                                        } else {
-                                            bgClass = 'bg-gradient-to-br from-yellow-400 to-yellow-500 text-white font-bold shadow-lg';
-                                        }
-                                    } else if (planned) {
-                                        if (planned === 'REST') {
-                                            bgClass = 'bg-gradient-to-br from-blue-100 to-blue-200 border-2 border-blue-300 text-blue-700 font-semibold';
-                                        } else if (planned === 'Push') {
-                                            bgClass = 'bg-green-100 border-2 border-green-400 border-dashed text-green-700 font-semibold';
-                                        } else {
-                                            bgClass = 'bg-yellow-100 border-2 border-yellow-400 border-dashed text-yellow-700 font-semibold';
-                                        }
-                                    }
-
-                                    return (
-                                        <button
-                                            key={day}
-                                            onClick={() => handleDayClick(day)}
-                                            className={`aspect-square rounded-lg p-2 transition-all hover:scale-105 ${
-                                                today ? 'ring-2 ring-blue-500' : ''
-                                            } ${bgClass}`}
-                                        >
-                                            <div className="text-lg">{day}</div>
-                                            {workout && (
-                                                <div className="text-xs mt-1">{workout.type}</div>
-                                            )}
-                                            {!workout && planned && (
-                                                <div className="text-xs mt-1">{planned === 'REST' ? '😴' : `${planned}?`}</div>
-                                            )}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            <div className="mt-6 p-4 bg-slate-50 rounded-lg">
-                                <p className="text-sm text-slate-600 mb-2">
-                                    <strong>Legenda:</strong>
-                                </p>
-                                <div className="flex gap-4 flex-wrap">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded bg-gradient-to-br from-green-400 to-green-500"></div>
-                                        <span className="text-sm">Push (wykonane)</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded bg-gradient-to-br from-yellow-400 to-yellow-500"></div>
-                                        <span className="text-sm">Pull (wykonane)</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded bg-gradient-to-br from-blue-100 to-blue-200 border-2 border-blue-300"></div>
-                                        <span className="text-sm">REST 😴</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded bg-green-100 border-2 border-green-400 border-dashed"></div>
-                                        <span className="text-sm">Planowane Push</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded bg-yellow-100 border-2 border-yellow-400 border-dashed"></div>
-                                        <span className="text-sm">Planowane Pull</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded ring-2 ring-blue-500 bg-white"></div>
-                                        <span className="text-sm">Dzisiaj</span>
-                                    </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 bg-white rounded-2xl shadow-xl p-6">
+                                <div className="flex justify-between items-center mb-6">
+                                    <button
+                                        onClick={() => changeMonth(-1)}
+                                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg font-semibold text-slate-700 transition-colors"
+                                    >
+                                        ← Poprzedni
+                                    </button>
+                                    <h2 className="text-2xl font-bold text-slate-800">
+                                        {monthNames[currentMonth]} {currentYear}
+                                    </h2>
+                                    <button
+                                        onClick={() => changeMonth(1)}
+                                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg font-semibold text-slate-700 transition-colors"
+                                    >
+                                        Następny →
+                                    </button>
                                 </div>
-                                <p className="text-xs text-slate-500 mt-3">
-                                    Kliknij na dzień z planowanym treningiem aby potwierdzić ✅
-                                </p>
-                            </div>
-                        </div>
 
-                        <div className="bg-white rounded-2xl shadow-xl p-6">
-                            <h2 className="text-2xl font-bold text-slate-800 mb-4">📋 Ostatnie treningi</h2>
-                            <div className="space-y-2">
-                                {[...workouts]
-                                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                                    .slice(0, 10)
-                                    .map(workout => {
-                                        const date = new Date(workout.date);
-                                        const dateStr = `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+                                <div className="grid grid-cols-7 gap-2 mb-2">
+                                    {dayNames.map(day => (
+                                        <div key={day} className="text-center text-sm font-semibold text-slate-600 p-2">
+                                            {day}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="grid grid-cols-7 gap-2">
+                                    {getCalendarDays().map((day, index) => {
+                                        if (day === null) {
+                                            return <div key={`empty-${index}`} className="aspect-square"></div>;
+                                        }
+
+                                        const date = new Date(currentYear, currentMonth, day);
+                                        const workout = getWorkoutForDate(date);
+                                        const planned = getPlannedWorkout(date);
+                                        const today = isToday(day);
+
+                                        let bgClass = 'bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200';
                                         
+                                        if (workout) {
+                                            if (workout.type === 'Push') {
+                                                bgClass = 'bg-gradient-to-br from-green-400 via-green-500 to-green-600 text-white font-bold shadow-lg border-2 border-green-600 hover:shadow-xl';
+                                            } else if (workout.type === 'Pull') {
+                                                bgClass = 'bg-gradient-to-br from-amber-400 via-amber-500 to-orange-500 text-white font-bold shadow-lg border-2 border-orange-600 hover:shadow-xl';
+                                            } else if (workout.type === 'REST') {
+                                                bgClass = 'bg-gradient-to-br from-sky-400 via-blue-500 to-blue-600 text-white font-bold shadow-lg border-2 border-blue-600 hover:shadow-xl';
+                                            }
+                                        } else if (planned) {
+                                            if (planned === 'REST') {
+                                                bgClass = 'bg-gradient-to-br from-sky-100 to-sky-200 border-2 border-sky-400 border-dashed text-sky-700 font-semibold';
+                                            } else if (planned === 'Push') {
+                                                bgClass = 'bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400 border-dashed text-green-700 font-semibold';
+                                            } else {
+                                                bgClass = 'bg-gradient-to-br from-amber-50 to-amber-100 border-2 border-amber-400 border-dashed text-amber-700 font-semibold';
+                                            }
+                                        }
+
                                         return (
-                                            <div 
-                                                key={workout.id} 
-                                                className={`flex items-center justify-between p-3 rounded-lg ${
-                                                    workout.type === 'Push' 
-                                                        ? 'bg-green-50' 
-                                                        : 'bg-yellow-50'
-                                                }`}
+                                            <button
+                                                key={day}
+                                                onClick={(e) => handleDayClick(day, e)}
+                                                className={`aspect-square rounded-xl p-2 transition-all hover:scale-105 ${
+                                                    today ? 'ring-4 ring-purple-500 ring-offset-2' : ''
+                                                } ${bgClass}`}
                                             >
-                                                <div className="flex items-center gap-3">
-                                                    <span className={`px-3 py-1 rounded-full text-sm font-bold ${
-                                                        workout.type === 'Push'
-                                                            ? 'bg-green-500 text-white'
-                                                            : 'bg-yellow-500 text-white'
-                                                    }`}>
-                                                        {workout.type}
-                                                    </span>
-                                                    <span className="font-medium text-slate-700">{dateStr}</span>
-                                                </div>
-                                                <button
-                                                    onClick={() => removeWorkout(workout.date)}
-                                                    className="text-red-500 hover:text-red-700 p-1 transition-colors"
-                                                >
-                                                    <Trash2 />
-                                                </button>
-                                            </div>
+                                                <div className="text-lg font-bold">{day}</div>
+                                                {workout && (
+                                                    <div className="text-xs mt-1">
+                                                        {workout.type === 'REST' ? '😴' : workout.type === 'Push' ? '💪' : '🏋️'}
+                                                    </div>
+                                                )}
+                                                {!workout && planned && (
+                                                    <div className="text-xs mt-1">{planned === 'REST' ? '😴?' : `${planned}?`}</div>
+                                                )}
+                                            </button>
                                         );
                                     })}
-                                {workouts.length === 0 && (
-                                    <p className="text-slate-400 text-center py-8 italic">
-                                        Jeszcze nie dodałeś żadnych treningów. Kliknij na dzień w kalendarzu aby zacząć! 💪
+                                </div>
+
+                                <div className="mt-6 p-4 bg-gradient-to-r from-slate-50 to-blue-50 rounded-xl border-2 border-slate-200">
+                                    <p className="text-sm text-slate-700 font-semibold mb-3">
+                                        📌 Legenda:
                                     </p>
-                                )}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-400 to-green-600 shadow-md border-2 border-green-600"></div>
+                                            <span className="text-sm font-medium">💪 Push</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 shadow-md border-2 border-orange-600"></div>
+                                            <span className="text-sm font-medium">🏋️ Pull</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-400 to-blue-600 shadow-md border-2 border-blue-600"></div>
+                                            <span className="text-sm font-medium">😴 REST</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 rounded-lg bg-white ring-4 ring-purple-500 ring-offset-2 border-2 border-slate-200"></div>
+                                            <span className="text-sm font-medium">Dzisiaj</span>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-3 italic">
+                                        💡 Kliknij na dzień aby wybrać typ treningu
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-2xl shadow-xl p-6">
+                                <h2 className="text-2xl font-bold text-slate-800 mb-4">📋 Ostatnie treningi</h2>
+                                <div className="space-y-2 max-h-[600px] overflow-y-auto">
+                                    {[...workouts]
+                                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                        .slice(0, 20)
+                                        .map(workout => {
+                                            const date = new Date(workout.date);
+                                            const dateStr = `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+                                            
+                                            return (
+                                                <div 
+                                                    key={workout.id} 
+                                                    className={`flex items-center justify-between p-3 rounded-xl border-2 ${
+                                                        workout.type === 'Push' 
+                                                            ? 'bg-gradient-to-r from-green-50 to-green-100 border-green-300' 
+                                                            : workout.type === 'Pull'
+                                                                ? 'bg-gradient-to-r from-amber-50 to-orange-100 border-orange-300'
+                                                                : 'bg-gradient-to-r from-sky-50 to-blue-100 border-blue-300'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`px-3 py-1 rounded-full text-sm font-bold shadow-md ${
+                                                            workout.type === 'Push'
+                                                                ? 'bg-gradient-to-r from-green-500 to-green-600 text-white'
+                                                                : workout.type === 'Pull'
+                                                                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white'
+                                                                    : 'bg-gradient-to-r from-sky-500 to-blue-600 text-white'
+                                                        }`}>
+                                                            {workout.type === 'REST' ? '😴 REST' : workout.type === 'Push' ? '💪 Push' : '🏋️ Pull'}
+                                                        </span>
+                                                        <span className="font-medium text-slate-700">{dateStr}</span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => removeWorkout(workout.date)}
+                                                        className="text-red-500 hover:text-red-700 hover:bg-red-100 p-2 rounded-lg transition-colors"
+                                                    >
+                                                        <Trash2 />
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    {workouts.length === 0 && (
+                                        <p className="text-slate-400 text-center py-8 italic">
+                                            Jeszcze nie dodałeś żadnych treningów. Kliknij na dzień w kalendarzu aby zacząć! 💪
+                                        </p>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </div>
+
+                    {/* Popup menu */}
+                    {showMenu && selectedDay && (
+                        <div 
+                            className="fixed z-50"
+                            style={{
+                                left: `${menuPosition.x}px`,
+                                top: `${menuPosition.y}px`,
+                                transform: 'translate(-50%, -100%)'
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="bg-white rounded-2xl shadow-2xl border-4 border-slate-200 p-2 mb-2">
+                                <div className="flex flex-col gap-2">
+                                    <button
+                                        onClick={(e) => handleWorkoutSelect('Push', e)}
+                                        className="px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold rounded-xl transition-all hover:scale-105 shadow-md"
+                                    >
+                                        💪 Push
+                                    </button>
+                                    <button
+                                        onClick={(e) => handleWorkoutSelect('Pull', e)}
+                                        className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold rounded-xl transition-all hover:scale-105 shadow-md"
+                                    >
+                                        🏋️ Pull
+                                    </button>
+                                    <button
+                                        onClick={(e) => handleWorkoutSelect('REST', e)}
+                                        className="px-6 py-3 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-bold rounded-xl transition-all hover:scale-105 shadow-md"
+                                    >
+                                        😴 REST
+                                    </button>
+                                    {getWorkoutForDate(selectedDay) && (
+                                        <button
+                                            onClick={handleDeleteWorkout}
+                                            className="px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-all hover:scale-105 shadow-md"
+                                        >
+                                            🗑️ Usuń
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                            <div 
+                                className="w-0 h-0 mx-auto"
+                                style={{
+                                    borderLeft: '10px solid transparent',
+                                    borderRight: '10px solid transparent',
+                                    borderTop: '10px solid #e2e8f0'
+                                }}
+                            ></div>
+                        </div>
+                    )}
                 </div>
             );
         };
